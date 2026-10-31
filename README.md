@@ -227,8 +227,8 @@ translation is involved; this is the noise floor the number above has to clear.
   is the NixOS closure itself.
 - **NAT networking** (`VZNATNetworkDeviceAttachment`), the one attachment needing no special
   macOS entitlement. DHCP and DNS come from macOS.
-- **Inbound over vsock** — addressed by port alone, so the tool accepts loopback TCP and
-  splices each connection to the guest. No gvproxy, no guest IP discovery.
+- **Inbound over vsock** — addressed by port alone, so the tool accepts loopback TCP or a
+  Unix socket and splices each connection to the guest. No gvproxy, no guest IP discovery.
 - **Zero external dependencies** (Foundation + Virtualization), so nixpkgs packaging needs no
   SwiftPM lockfile machinery.
 
@@ -244,8 +244,8 @@ prints the version and usage text and exits non-zero.
 `pkgs.vzvm` is a normal package and nothing stops you pointing it at your own kernel and
 initrd. Be warned, though, that it is **highly specialized for the Linux-builder use case**.
 There is no display or GUI, no cloud-init or image import, no snapshots, no bridged or
-`vmnet` networking, no inbound path except loopback TCP spliced to vsock, and the kernel has
-to be an uncompressed arm64 `Image`. If your guest does not look almost exactly like a Nix
+`vmnet` networking, no inbound path except loopback TCP or a Unix socket spliced to vsock,
+and the kernel has to be an uncompressed arm64 `Image`. If your guest does not look almost exactly like a Nix
 remote builder, one of the general-purpose [VM runners](#vm-runners) — vfkit, Lima, UTM —
 will be simpler to use and far better documented for it.
 
@@ -276,12 +276,17 @@ will be simpler to use and far better documented for it.
 `cpuCount`, `memorySizeMiB`, `kernel`, `initrd` and `cmdline` are required; the rest default.
 Unknown keys are rejected rather than ignored, so a typo in the generating module fails
 loudly. The schema is deliberately no larger than what the module emits — networking is
-always NAT, Rosetta always shared under the tag `rosetta`, shared directories always
-writable.
+always NAT, and Rosetta always shared under the tag `rosetta`.
 
 Notes:
 
 - `disks` map positionally onto `/dev/vda`, `/dev/vdb`, ... Order is significant.
+- `shares` are writable unless `"readOnly": true`. The host enforces it: a guest that
+  remounts a read-only share writable still gets `EPERM` on every write.
+- A `vsock.forwards` `listen` that is an absolute path is a Unix socket, for example
+  `{ "listen": "/run/user/501/builder/ssh.sock", "vsockPort": 22 }`. Any local user can
+  connect to a loopback TCP port; a Unix socket takes its access control from its directory.
+  vzvm does not remove the socket file, and refuses to start if the path exists.
 - A disk whose _contents_ are a QEMU qcow2 is rejected — the check reads magic bytes, not the
   name. The `.qcow2` path above is a raw disk keeping that filename because nix-darwin's
   `ephemeral` expects it; this catches genuine leftovers from `darwin.linux-builder`.
@@ -426,7 +431,7 @@ no network fetches during the build, and it is ad-hoc codesigned with the one en
 | `main.swift`                  | Entry point, argument handling, VM lifecycle, signal handling |
 | `Config.swift`                | The JSON schema, with unknown keys rejected; exit codes       |
 | `VirtualMachineBuilder.swift` | Preflight checks and the `VZVirtualMachineConfiguration`      |
-| `VsockProxy.swift`            | Splices loopback TCP connections to guest vsock               |
+| `VsockProxy.swift`            | Splices loopback TCP or Unix socket connections to vsock      |
 | `GuestConsole.swift`          | Line-buffers the guest serial console into unified logging    |
 | `Log.swift`                   | `os.Logger` under `systems.applicative.vzvm`                  |
 

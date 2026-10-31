@@ -22,6 +22,56 @@ final class VsockProxy {
   }
 
   func start() throws {
+    let fd = forward.listen.hasPrefix("/") ? try bindUnix(path: forward.listen) : try bindTCP()
+    // Nix opens connections in bursts. an overflowing backlog fails them instantly.
+    guard listen(fd, Int32(SOMAXCONN)) == 0 else {
+      let reason = String(cString: strerror(errno))
+      close(fd)
+      throw VZVMError.runtime("listen(): \(reason)")
+    }
+
+    listenFD = fd
+    let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+    source.setEventHandler { [weak self] in self?.acceptOne() }
+    source.setCancelHandler { close(fd) }
+    acceptSource = source
+    source.resume()
+
+    Log.info("forwarding \(forward.listen) -> vsock:\(forward.vsockPort)")
+  }
+
+  /// A Unix socket takes its access control from its directory, which loopback TCP
+  /// cannot: any local user reaches a loopback port. An existing path is an error,
+  /// not a wait, because nothing but this process should own it.
+  private func bindUnix(path: String) throws -> Int32 {
+    var addr = sockaddr_un()
+    let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+    guard path.utf8.count < capacity else {
+      throw VZVMError.config("listen path '\(path)' is longer than \(capacity - 1) bytes")
+    }
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else {
+      throw VZVMError.runtime("socket(): \(String(cString: strerror(errno)))")
+    }
+    addr.sun_family = sa_family_t(AF_UNIX)
+    withUnsafeMutableBytes(of: &addr.sun_path) { buffer in
+      buffer.copyBytes(from: path.utf8)
+    }
+    addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    let bound = withUnsafePointer(to: &addr) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+        Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    guard bound == 0 else {
+      let reason = String(cString: strerror(errno))
+      close(fd)
+      throw VZVMError.runtime("cannot listen on \(path): \(reason)")
+    }
+    return fd
+  }
+
+  private func bindTCP() throws -> Int32 {
     let (host, port) = try Self.parse(listen: forward.listen)
 
     let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -68,21 +118,7 @@ final class VsockProxy {
         \(errno == EADDRINUSE ? " (another builder VM is probably already running)" : "")
         """)
     }
-    // Nix opens connections in bursts. an overflowing backlog fails them instantly.
-    guard listen(fd, Int32(SOMAXCONN)) == 0 else {
-      let reason = String(cString: strerror(errno))
-      close(fd)
-      throw VZVMError.runtime("listen(): \(reason)")
-    }
-
-    listenFD = fd
-    let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-    source.setEventHandler { [weak self] in self?.acceptOne() }
-    source.setCancelHandler { close(fd) }
-    acceptSource = source
-    source.resume()
-
-    Log.info("forwarding \(forward.listen) -> vsock:\(forward.vsockPort)")
+    return fd
   }
 
   func stop() {
