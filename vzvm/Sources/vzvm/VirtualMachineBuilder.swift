@@ -149,7 +149,8 @@ enum VirtualMachineBuilder {
     var sharingDevices: [VZDirectorySharingDeviceConfiguration] = config.shares.map { share in
       let device = VZVirtioFileSystemDeviceConfiguration(tag: share.tag)
       device.share = VZSingleDirectoryShare(
-        directory: VZSharedDirectory(url: URL(fileURLWithPath: share.path), readOnly: false))
+        directory: VZSharedDirectory(
+          url: URL(fileURLWithPath: share.path), readOnly: share.readOnly))
       return device
     }
 

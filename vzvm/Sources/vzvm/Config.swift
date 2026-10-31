@@ -57,14 +57,16 @@ struct Config: Decodable {
   struct Share: Decodable {
     var tag: String
     var path: String
+    var readOnly: Bool = false
 
-    enum CodingKeys: String, CodingKey, CaseIterable { case tag, path }
+    enum CodingKeys: String, CodingKey, CaseIterable { case tag, path, readOnly }
 
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       try decoder.rejectUnknownKeys(CodingKeys.self)
       tag = try container.decode(String.self, forKey: .tag)
       path = try container.decode(String.self, forKey: .path)
+      readOnly = try container.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
     }
   }
 
@@ -82,7 +84,7 @@ struct Config: Decodable {
     }
 
     struct Forward: Decodable {
-      /// "127.0.0.1:31022"
+      /// "127.0.0.1:31022", or an absolute path for a Unix socket
       var listen: String
       var vsockPort: UInt32
 
